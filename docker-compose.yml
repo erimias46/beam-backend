@@ -1,0 +1,67 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    ports:
+      - "4000:4000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - beam0_network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: beam0
+      POSTGRES_PASSWORD: beam0
+      POSTGRES_DB: beam0
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U beam0"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - beam0_network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - beam0_network
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - beam0_network
+    profiles:
+      - dev
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  beam0_network:
+    driver: bridge
