@@ -3,15 +3,12 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Booking status enum
-CREATE TYPE booking_status AS ENUM (
-  'requested',
-  'accepted',
-  'declined',
-  'in_progress',
-  'completed',
-  'cancelled',
-  'paid'
-);
+DO $$ BEGIN
+  CREATE TYPE booking_status AS ENUM (
+    'requested', 'accepted', 'declined',
+    'in_progress', 'completed', 'cancelled', 'paid'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
@@ -96,10 +93,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS bookings_updated_at ON bookings;
 CREATE TRIGGER bookings_updated_at
   BEFORE UPDATE ON bookings
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS barber_profiles_updated_at ON barber_profiles;
 CREATE TRIGGER barber_profiles_updated_at
   BEFORE UPDATE ON barber_profiles
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
