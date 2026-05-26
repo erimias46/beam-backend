@@ -1,0 +1,31 @@
+{
+  "name": "beam0-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "migrate": "node src/db/migrate.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "zod": "^3.23.8",
+    "pg": "^8.12.0",
+    "stripe": "^16.2.0",
+    "bullmq": "^5.8.0",
+    "ioredis": "^5.4.1",
+    "firebase-admin": "^12.2.0",
+    "twilio": "^5.2.2",
+    "dotenv": "^16.4.5",
+    "express-rate-limit": "^7.4.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
