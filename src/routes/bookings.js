@@ -1,10 +1,13 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import Stripe from 'stripe'
 import { query, getClient } from '../db/index.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
 import { assertTransition } from '../middleware/booking-fsm.js'
 import { sendNotification } from '../services/notifications.js'
 import { scheduleAutoCancel, cancelAutoCancel } from '../services/queue.js'
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
 const router = Router()
 
@@ -107,7 +110,25 @@ router.patch('/:id/accept', requireAuth, requireRole('barber'), async (req, res,
     if (booking.barber_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
     if (!assertTransition(booking.status, 'accepted', res)) return
 
-    // TODO: create Stripe PaymentIntent with capture_method: 'manual'
+    // Look up the barber's Stripe account
+    const barberInfo = await query('SELECT stripe_account_id FROM users WHERE id = $1', [booking.barber_id])
+    const barberStripeId = barberInfo.rows[0]?.stripe_account_id
+
+    // Create Stripe PaymentIntent with manual capture (authorize only)
+    let paymentIntentId = null
+    if (process.env.STRIPE_SECRET_KEY) {
+      const pi = await stripe.paymentIntents.create({
+        amount: booking.price_cents,
+        currency: 'usd',
+        capture_method: 'manual',
+        payment_method_types: ['card'],
+        metadata: { booking_id: booking.id, barber_id: req.user.id },
+        transfer_data: { destination: barberStripeId },
+      })
+      paymentIntentId = pi.id
+      await client.query('UPDATE bookings SET stripe_payment_intent_id = $1 WHERE id = $2', [paymentIntentId, booking.id])
+    }
+
     await client.query(`UPDATE bookings SET status = 'accepted' WHERE id = $1`, [booking.id])
     await client.query('COMMIT')
 
@@ -162,7 +183,30 @@ router.patch('/:id/complete', requireAuth, requireRole('barber'), async (req, re
     await client.query(`UPDATE bookings SET status = 'completed' WHERE id = $1`, [booking.id])
     await client.query('COMMIT')
 
-    // TODO: capture Stripe PaymentIntent + transfer 85% to barber
+    // Capture payment and transfer 85% to barber
+    const completedBooking = await query('SELECT stripe_payment_intent_id, price_cents, barber_id FROM bookings WHERE id = $1', [booking.id])
+    const { stripe_payment_intent_id, price_cents, barber_id } = completedBooking.rows[0]
+
+    if (stripe_payment_intent_id && process.env.STRIPE_SECRET_KEY) {
+      const barberInfo = await query('SELECT stripe_account_id FROM users WHERE id = $1', [barber_id])
+      const barberStripeId = barberInfo.rows[0]?.stripe_account_id
+      const barberAmount = Math.floor(price_cents * 0.85)
+
+      await stripe.paymentIntents.capture(stripe_payment_intent_id, {
+        amount_to_capture: price_cents,
+      })
+
+      if (barberStripeId) {
+        await stripe.transfers.create({
+          amount: barberAmount,
+          currency: 'usd',
+          destination: barberStripeId,
+          metadata: { booking_id: booking.id },
+        })
+      }
+      // Update booking status to paid
+      await query("UPDATE bookings SET status = 'paid' WHERE id = $1", [booking.id])
+    }
 
     await sendNotification(booking.customer_id, {
       title: 'Payment done',

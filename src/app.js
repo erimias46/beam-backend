@@ -11,6 +11,7 @@ import bookingsRoutes from './routes/bookings.js'
 import stripeRoutes from './routes/stripe.js'
 import devicesRoutes from './routes/devices.js'
 import reviewsRoutes from './routes/reviews.js'
+import { startWorker } from './services/queue.js'
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -64,6 +65,8 @@ app.use((err, req, res, next) => {
   console.error(err)
   res.status(status).json({ error: err.message || 'Internal server error' })
 })
+
+startWorker()
 
 app.listen(PORT, () => {
   console.log(`Beam0 API running on :${PORT}`)

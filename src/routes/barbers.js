@@ -1,7 +1,10 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import Stripe from 'stripe'
 import { query } from '../db/index.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
 const router = Router()
 
@@ -91,10 +94,21 @@ router.post('/profile', requireAuth, requireRole('barber'), async (req, res, nex
 /* POST /api/barbers/onboard — Stripe Connect onboarding */
 router.post('/onboard', requireAuth, requireRole('barber'), async (req, res, next) => {
   try {
-    // TODO: create Stripe connected account + return onboarding URL
-    // const account = await stripe.accounts.create({ type: 'express' })
-    // const link = await stripe.accountLinks.create({ account: account.id, ... })
-    res.json({ url: 'https://connect.stripe.com/setup/e/mock' })
+    // Create Express account if barber doesn't have one yet
+    const user = await query('SELECT stripe_account_id FROM users WHERE id = $1', [req.user.id])
+    let accountId = user.rows[0].stripe_account_id
+    if (!accountId) {
+      const account = await stripe.accounts.create({ type: 'express', capabilities: { transfers: { requested: true } } })
+      accountId = account.id
+      await query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [accountId, req.user.id])
+    }
+    const link = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${process.env.APP_URL || 'http://localhost:3000'}/barber/onboard`,
+      return_url: `${process.env.APP_URL || 'http://localhost:3000'}/barber/dashboard`,
+      type: 'account_onboarding',
+    })
+    res.json({ url: link.url })
   } catch (err) {
     next(err)
   }

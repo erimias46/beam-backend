@@ -46,11 +46,17 @@ router.post('/webhook', async (req, res, next) => {
       }
 
       case 'account.updated': {
-        // Barber completed Stripe Connect onboarding
         const account = event.data.object
-        if (account.charges_enabled) {
+        const chargesEnabled = account.charges_enabled
+        await query(
+          'UPDATE users SET stripe_account_id = $1 WHERE stripe_account_id = $1',
+          [account.id]
+        )
+        // If fully onboarded, mark barber profile as verified
+        if (chargesEnabled) {
           await query(
-            `UPDATE users SET stripe_account_id = $1 WHERE stripe_account_id = $1`,
+            `UPDATE barber_profiles SET is_available = true
+             WHERE user_id = (SELECT id FROM users WHERE stripe_account_id = $1)`,
             [account.id]
           )
         }
