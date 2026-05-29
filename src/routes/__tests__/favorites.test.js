@@ -1,4 +1,6 @@
 // Integration tests for /api/favorites (spec 0044).
+// POST /api/favorites   body: { barber_id }  (customer only)
+// DELETE /api/favorites/:barberId             (customer only)
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,9 +27,9 @@ async function seedBarber() {
 
 test('GET /api/favorites — returns empty list initially', { skip }, async () => {
   await resetDb()
-  const user = await seedUser()
-  const app  = await getApp()
-  const r    = await request(app).get('/api/favorites').set('Authorization', `Bearer ${jwtFor(user)}`)
+  const customer = await seedUser({ role: 'customer' })
+  const app      = await getApp()
+  const r        = await request(app).get('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`)
   assert.equal(r.status, 200)
   const list = r.body.favorites ?? r.body
   assert.ok(Array.isArray(list))
@@ -39,35 +41,50 @@ test('GET /api/favorites — unauthenticated returns 401', { skip }, async () =>
   assert.equal((await request(app).get('/api/favorites')).status, 401)
 })
 
-/* ─── POST /api/favorites/:barberId ──────────────────── */
+/* ─── POST /api/favorites — body: { barber_id } ─────── */
 
-test('POST /api/favorites/:barberId — customer can favorite a barber', { skip }, async () => {
+test('POST /api/favorites — customer can favorite a barber', { skip }, async () => {
   await resetDb()
   const customer = await seedUser({ role: 'customer' })
   const barber   = await seedBarber()
   const app      = await getApp()
   const r        = await request(app)
-    .post(`/api/favorites/${barber.id}`)
+    .post('/api/favorites')
     .set('Authorization', `Bearer ${jwtFor(customer)}`)
+    .send({ barber_id: barber.id })
   assert.ok(r.status === 200 || r.status === 201, JSON.stringify(r.body))
+  assert.ok(r.body.ok || r.body.barber_id === barber.id)
 })
 
-test('POST /api/favorites/:barberId — after favoriting, barber appears in list', { skip }, async () => {
+test('POST /api/favorites — after favoriting, barber appears in list', { skip }, async () => {
   await resetDb()
   const customer = await seedUser({ role: 'customer' })
   const barber   = await seedBarber()
   const app      = await getApp()
-  await request(app).post(`/api/favorites/${barber.id}`).set('Authorization', `Bearer ${jwtFor(customer)}`)
+  await request(app).post('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`).send({ barber_id: barber.id })
   const r    = await request(app).get('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`)
   const list = r.body.favorites ?? r.body
-  assert.ok(list.some(f => f.barber_id === barber.id || f.id === barber.id))
+  assert.ok(list.some(f => f.barber_id === barber.id || f.id === barber.id), `barber not in list: ${JSON.stringify(list)}`)
 })
 
-test('POST /api/favorites/:barberId — unauthenticated returns 401', { skip }, async () => {
+test('POST /api/favorites — unauthenticated returns 401', { skip }, async () => {
   await resetDb()
   const barber = await seedBarber()
   const app    = await getApp()
-  assert.equal((await request(app).post(`/api/favorites/${barber.id}`)).status, 401)
+  const r      = await request(app).post('/api/favorites').send({ barber_id: barber.id })
+  assert.equal(r.status, 401)
+})
+
+test('POST /api/favorites — barber role returns 403', { skip }, async () => {
+  await resetDb()
+  const barber  = await seedBarber()
+  const barber2 = await seedBarber()
+  const app     = await getApp()
+  const r       = await request(app)
+    .post('/api/favorites')
+    .set('Authorization', `Bearer ${jwtFor(barber)}`)
+    .send({ barber_id: barber2.id })
+  assert.equal(r.status, 403)
 })
 
 /* ─── DELETE /api/favorites/:barberId ─────────────────── */
@@ -77,14 +94,13 @@ test('DELETE /api/favorites/:barberId — customer can unfavorite', { skip }, as
   const customer = await seedUser({ role: 'customer' })
   const barber   = await seedBarber()
   const app      = await getApp()
-  await request(app).post(`/api/favorites/${barber.id}`).set('Authorization', `Bearer ${jwtFor(customer)}`)
-  const r        = await request(app)
+  await request(app).post('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`).send({ barber_id: barber.id })
+  const r = await request(app)
     .delete(`/api/favorites/${barber.id}`)
     .set('Authorization', `Bearer ${jwtFor(customer)}`)
   assert.ok(r.status === 200 || r.status === 204)
-  // Confirm removed
-  const list     = await request(app).get('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`)
-  const favs     = list.body.favorites ?? list.body
+  const list = (await request(app).get('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`)).body
+  const favs = list.favorites ?? list
   assert.ok(!favs.some(f => f.barber_id === barber.id || f.id === barber.id))
 })
 
@@ -95,10 +111,11 @@ test('GET /api/barbers?favorites_first=true — includes is_favorite flag', { sk
   const customer = await seedUser({ role: 'customer' })
   const barber   = await seedBarber()
   const app      = await getApp()
-  await request(app).post(`/api/favorites/${barber.id}`).set('Authorization', `Bearer ${jwtFor(customer)}`)
+  await request(app).post('/api/favorites').set('Authorization', `Bearer ${jwtFor(customer)}`).send({ barber_id: barber.id })
   const r    = await request(app)
     .get('/api/barbers?favorites_first=true')
     .set('Authorization', `Bearer ${jwtFor(customer)}`)
+  assert.equal(r.status, 200)
   const list = r.body.barbers ?? r.body
   const found = list.find(b => b.id === barber.id)
   if (found) assert.ok(found.is_favorite === true, 'favorited barber should have is_favorite=true')

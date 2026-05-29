@@ -55,6 +55,15 @@ export async function migrateOnce() {
 /** Truncate every table except schema_migrations. Run before each test. */
 export async function resetDb() {
   await migrateOnce()
+  // platform_settings is created on-demand by settings.js (not a migration file).
+  // Ensure it exists so getSetting() never fails with "relation does not exist".
+  await testPool.query(`
+    CREATE TABLE IF NOT EXISTS platform_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
   await testPool.query(`
     DO $$
     DECLARE r record;
