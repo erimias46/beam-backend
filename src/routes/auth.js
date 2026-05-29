@@ -17,7 +17,7 @@ const EmailSchema = z.object({ email: z.string().email().max(254).toLowerCase() 
 const OtpSchema   = z.object({
   email: z.string().email().max(254).toLowerCase(),
   code:  z.string().regex(/^\d{6}$/),
-  role:  z.enum(['customer', 'barber']).optional().default('customer'),
+  role:  z.enum(['customer', 'barber', 'admin']).optional().default('customer'),
 })
 
 /* ─── Rate limits (defence-in-depth on top of OTP TTL + attempt cap) ─── */
