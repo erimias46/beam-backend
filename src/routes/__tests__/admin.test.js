@@ -56,19 +56,19 @@ for (const { method, path } of ADMIN_ROUTES) {
 
 /* ─── GET /api/metrics — admin only ──────────────────── */
 
-test('GET /api/metrics — admin gets process metrics', { skip }, async () => {
+test('GET /metrics — admin gets process metrics', { skip }, async () => {
   await resetDb()
   const admin = await seedUser({ role: 'admin' })
   const app   = await getApp()
-  const r     = await request(app).get('/api/metrics').set('Authorization', `Bearer ${jwtFor(admin)}`)
+  const r     = await request(app).get('/metrics').set('Authorization', `Bearer ${jwtFor(admin)}`)
   assert.equal(r.status, 200)
 })
 
-test('GET /api/metrics — customer returns 403', { skip }, async () => {
+test('GET /metrics — customer returns 403', { skip }, async () => {
   await resetDb()
   const customer = await seedUser({ role: 'customer' })
   const app      = await getApp()
-  const r        = await request(app).get('/api/metrics').set('Authorization', `Bearer ${jwtFor(customer)}`)
+  const r        = await request(app).get('/metrics').set('Authorization', `Bearer ${jwtFor(customer)}`)
   assert.equal(r.status, 403)
 })
 
@@ -82,10 +82,11 @@ test('Admin can create a promo code', { skip }, async () => {
     .post('/api/admin/promos')
     .set('Authorization', `Bearer ${jwtFor(admin)}`)
     .send({
-      code:             'ADMIN10',
-      discount_bps:     1000,
-      max_redemptions:  50,
-      valid_from:       new Date(Date.now() - 1000).toISOString(),
+      code:            'ADMIN10',
+      type:            'percent',
+      percent_off:     10,
+      redemptions_max: 50,
+      valid_from:      new Date(Date.now() - 1000).toISOString(),
     })
   assert.ok(r.status === 200 || r.status === 201, JSON.stringify(r.body))
 })
