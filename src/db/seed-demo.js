@@ -35,11 +35,12 @@ async function seed() {
   console.log('Seeding demo accounts...')
 
   for (const u of DEMO_USERS) {
-    // Upsert user
+    // Upsert user (partial unique index needs WHERE clause on conflict target)
     const { rows } = await query(
       `INSERT INTO users (name, email, role)
        VALUES ($1, $2, $3)
-       ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role
+       ON CONFLICT (email) WHERE email IS NOT NULL
+       DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role
        RETURNING id`,
       [u.name, u.email, u.role]
     )
