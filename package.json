@@ -8,9 +8,10 @@
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
     "migrate": "node src/db/migrate.js",
-    "test": "node --test --test-reporter=spec 'src/**/__tests__/**/*.test.js'",
-    "test:watch": "node --test --watch 'src/**/__tests__/**/*.test.js'",
-    "test:unit": "node --test --test-reporter=spec 'src/**/__tests__/**/*.test.js' --test-name-pattern='^(?!.*\\[route\\])'"
+    "test": "node --test --test-reporter=spec 'src/**/__tests__/**/*.test.js' 'src/middleware/__tests__/**/*.test.js' 'src/routes/__tests__/**/*.test.js' 'src/services/__tests__/**/*.test.js'",
+    "test:unit": "node --test --test-reporter=spec 'src/middleware/__tests__/**/*.test.js' 'src/services/__tests__/**/*.test.js'",
+    "test:integration": "node --test --test-reporter=spec 'src/routes/__tests__/**/*.test.js' 'src/__tests__/integration/**/*.test.js'",
+    "test:watch": "node --test --watch 'src/**/__tests__/**/*.test.js' 'src/middleware/__tests__/**/*.test.js' 'src/routes/__tests__/**/*.test.js'"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1054.0",
