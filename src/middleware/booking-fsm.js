@@ -1,12 +1,16 @@
-/* Booking state machine — enforces valid transitions */
+/* Booking state machine — enforces valid transitions.
+   Spec 0023 introduces awaiting_confirmation between in_progress and completed.
+   Barber tap on /complete → awaiting_confirmation. Customer /confirm or
+   auto-confirm timeout → completed. Customer /dispute → cancelled. */
 const TRANSITIONS = {
-  requested:   ['accepted', 'declined', 'cancelled'],
-  accepted:    ['in_progress', 'cancelled'],
-  in_progress: ['completed'],
-  completed:   ['paid'],
-  declined:    [],
-  cancelled:   [],
-  paid:        [],
+  requested:             ['accepted', 'declined', 'cancelled'],
+  accepted:              ['in_progress', 'cancelled'],
+  in_progress:           ['awaiting_confirmation', 'cancelled'],
+  awaiting_confirmation: ['completed', 'cancelled'],
+  completed:             ['paid'],
+  declined:              [],
+  cancelled:             [],
+  paid:                  [],
 }
 
 export function canTransition(from, to) {

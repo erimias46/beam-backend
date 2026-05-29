@@ -7,25 +7,34 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
-    "migrate": "node src/db/migrate.js"
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test --test-reporter=spec 'src/**/__tests__/**/*.test.js'",
+    "test:watch": "node --test --watch 'src/**/__tests__/**/*.test.js'",
+    "test:unit": "node --test --test-reporter=spec 'src/**/__tests__/**/*.test.js' --test-name-pattern='^(?!.*\\[route\\])'"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1054.0",
     "bullmq": "^5.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
-    "firebase-admin": "^12.2.0",
     "helmet": "^7.1.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "multer": "^2.1.1",
     "nodemailer": "^8.0.9",
     "pg": "^8.12.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.3.0",
     "stripe": "^16.2.0",
+    "web-push": "^3.6.7",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "pino-pretty": "^11.2.2",
+    "supertest": "^7.0.0"
   }
 }

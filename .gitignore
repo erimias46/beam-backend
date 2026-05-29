@@ -1,5 +1,12 @@
 node_modules
 .env
+.env.local
+.env.*.local
 .DS_Store
 dist
+coverage
 *.log
+
+# Local user uploads (completion proof photos, portfolio, etc.) — never commit
+uploads/
+!uploads/.gitkeep

@@ -6,6 +6,10 @@ services:
     ports:
       - "4000:4000"
     env_file: .env
+    environment:
+      # Inside compose, localhost is the container — use service hostnames
+      DATABASE_URL: postgresql://beam0:beam0@postgres:5432/beam0
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
