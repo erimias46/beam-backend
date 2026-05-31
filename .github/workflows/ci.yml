@@ -35,7 +35,8 @@ jobs:
       DATABASE_URL:      postgres://beam0:beam0@localhost:5432/beam0_test
       TEST_DATABASE_URL: postgres://beam0:beam0@localhost:5432/beam0_test
       REDIS_URL:         redis://localhost:6379
-      JWT_SECRET:        ci-test-secret
+      JWT_SECRET:        ci-only-test-jwt-secret-do-not-use-in-prod!!
+      ALLOW_MASTER_OTP:  "true"
       NODE_ENV:          test
 
     steps:
