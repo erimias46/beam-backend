@@ -159,6 +159,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
          JOIN barber_profiles bp ON bp.user_id = u.id
         WHERE u.role = 'barber'
           AND u.is_suspended = false
+          AND u.deleted_at IS NULL
           AND bp.is_available = true
           ${whereRadius}
           ${filterMinRating}
@@ -184,7 +185,7 @@ router.get('/:id', async (req, res, next) => {
               bp.profile_photo_url, bp.is_available, bp.rating_avg, bp.rating_count
          FROM users u
          JOIN barber_profiles bp ON bp.user_id = u.id
-        WHERE u.id = $1 AND u.role = 'barber' AND u.is_suspended = false`,
+        WHERE u.id = $1 AND u.role = 'barber' AND u.is_suspended = false AND u.deleted_at IS NULL`,
       [req.params.id]
     )
     if (!rows[0]) return res.status(404).json({ error: 'Barber not found' })

@@ -465,14 +465,20 @@ router.patch('/:id/accept', requireAuth, requireRole('barber'), idempotency(), a
 /* PATCH /api/bookings/:id/decline */
 router.patch('/:id/decline', requireAuth, requireRole('barber'), async (req, res, next) => {
   try {
-    const { rows } = await query('SELECT * FROM bookings WHERE id = $1', [req.params.id])
-    const booking = rows[0]
-    if (!booking) return res.status(404).json({ error: 'Not found' })
-    if (booking.barber_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
-    if (!assertTransition(booking.status, 'declined', res)) return
+    const { rows: preRows } = await query('SELECT status, barber_id, customer_id FROM bookings WHERE id = $1', [req.params.id])
+    const pre = preRows[0]
+    if (!pre) return res.status(404).json({ error: 'Not found' })
+    if (pre.barber_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
+    if (!assertTransition(pre.status, 'declined', res)) return
 
-    await query(`UPDATE bookings SET status = 'declined' WHERE id = $1`, [booking.id])
-    await logEvent(null, booking.id, req.user.id, booking.status, 'declined', null)
+    // Atomic conditional update — prevents concurrent double-transition
+    const { rows, rowCount } = await query(
+      `UPDATE bookings SET status = 'declined' WHERE id = $1 AND status = $2 RETURNING *`,
+      [req.params.id, pre.status]
+    )
+    if (!rowCount) return res.status(409).json({ error: 'booking_state_changed', message: 'Booking status changed — please refresh.' })
+    const booking = rows[0]
+    await logEvent(null, booking.id, req.user.id, pre.status, 'declined', null)
     cancelAutoCancel(booking.id).catch(e => console.warn('[queue]', e.message))
     emitToUsers([booking.customer_id, req.user.id], 'booking_updated', { booking_id: booking.id, status: 'declined' })
     sendNotification(booking.customer_id, {
@@ -488,14 +494,20 @@ router.patch('/:id/decline', requireAuth, requireRole('barber'), async (req, res
 /* PATCH /api/bookings/:id/start  — accepted → in_progress */
 router.patch('/:id/start', requireAuth, requireRole('barber'), async (req, res, next) => {
   try {
-    const { rows } = await query('SELECT * FROM bookings WHERE id = $1', [req.params.id])
-    const booking = rows[0]
-    if (!booking) return res.status(404).json({ error: 'Not found' })
-    if (booking.barber_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
-    if (!assertTransition(booking.status, 'in_progress', res)) return
+    const { rows: preRows } = await query('SELECT status, barber_id, customer_id FROM bookings WHERE id = $1', [req.params.id])
+    const pre = preRows[0]
+    if (!pre) return res.status(404).json({ error: 'Not found' })
+    if (pre.barber_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' })
+    if (!assertTransition(pre.status, 'in_progress', res)) return
 
-    await query(`UPDATE bookings SET status = 'in_progress' WHERE id = $1`, [booking.id])
-    await logEvent(null, booking.id, req.user.id, booking.status, 'in_progress', null)
+    // Atomic conditional update — prevents concurrent double-transition
+    const { rows, rowCount } = await query(
+      `UPDATE bookings SET status = 'in_progress' WHERE id = $1 AND status = $2 RETURNING *`,
+      [req.params.id, pre.status]
+    )
+    if (!rowCount) return res.status(409).json({ error: 'booking_state_changed', message: 'Booking status changed — please refresh.' })
+    const booking = rows[0]
+    await logEvent(null, booking.id, req.user.id, pre.status, 'in_progress', null)
 
     emitToUsers([booking.customer_id, req.user.id], 'booking_updated', { booking_id: booking.id, status: 'in_progress' })
     cancelBarberNoShowCheck(booking.id).catch(() => {})

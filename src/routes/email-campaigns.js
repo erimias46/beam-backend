@@ -57,14 +57,20 @@ unsubscribeRouter.get('/open', async (req, res) => {
 
 unsubscribeRouter.get('/click', async (req, res) => {
   const data = verify(req.query.token)
-  const url  = String(req.query.url || '/')
-  if (data?.uid && data?.campaign) {
-    query(
-      `UPDATE email_sends SET clicked_at = COALESCE(clicked_at, now())
-        WHERE user_id = $1 AND campaign_id = $2`,
-      [data.uid, data.campaign]
-    ).catch(() => {})
-  }
+  if (!data?.uid || !data?.campaign || !data?.url) return res.status(400).send('Invalid link.')
+  // SEC-4: destination URL is signed into the token — never trust query string `url`
+  const url = String(data.url)
+  // Validate: must be a relative path or our own domain
+  const isAllowed = url.startsWith('/') ||
+    /^https?:\/\/(bookabeam\.com|www\.bookabeam\.com|beam-frontend-nu\.vercel\.app)/.test(url) ||
+    (process.env.APP_URL && url.startsWith(process.env.APP_URL)) ||
+    (process.env.FRONTEND_URL && url.startsWith(process.env.FRONTEND_URL))
+  if (!isAllowed) return res.status(400).send('Invalid redirect.')
+  query(
+    `UPDATE email_sends SET clicked_at = COALESCE(clicked_at, now())
+      WHERE user_id = $1 AND campaign_id = $2`,
+    [data.uid, data.campaign]
+  ).catch(() => {})
   res.redirect(302, url)
 })
 
@@ -76,5 +82,5 @@ export function openPixelUrl(baseUrl, uid, campaign) {
   return `${baseUrl}/api/unsubscribe/open?token=${sign({ uid, campaign, t: 'o' })}`
 }
 export function trackedClickUrl(baseUrl, uid, campaign, url) {
-  return `${baseUrl}/api/unsubscribe/click?token=${sign({ uid, campaign, t: 'c' })}&url=${encodeURIComponent(url)}`
+  return `${baseUrl}/api/unsubscribe/click?token=${sign({ uid, campaign, url, t: 'c' })}`
 }

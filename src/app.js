@@ -60,7 +60,7 @@ app.use(cors({
   origin(origin, cb) {
     // Allow same-origin / curl / mobile (no Origin header)
     if (!origin) return cb(null, true)
-    if (process.env.NODE_ENV !== 'production') return cb(null, true)
+    if (process.env.NODE_ENV === 'development') return cb(null, true)
     if (allowedOrigins.includes(origin)) return cb(null, true)
     return cb(new Error('CORS not allowed'))
   },
@@ -238,7 +238,8 @@ app.use((err, req, res, next) => {
   } else {
     req.log?.warn({ err: err.message, status }, 'request failed')
   }
-  const msg = status >= 500 && process.env.NODE_ENV === 'production'
+  const isDev = process.env.NODE_ENV === 'development'
+  const msg = status >= 500 && !isDev
     ? 'Internal server error'
     : (err.message || 'Internal server error')
   res.status(status).json({ error: msg })

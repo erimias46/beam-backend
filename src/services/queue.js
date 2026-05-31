@@ -1,5 +1,5 @@
 import { Queue, Worker } from 'bullmq'
-import { query } from '../db/index.js'
+import { query, getClient } from '../db/index.js'
 import { sendNotification } from './notifications.js'
 import { emitToUsers } from './sse.js'
 import { getBarberShare } from '../config.js'
@@ -244,16 +244,27 @@ export function startWorker() {
 
         if (job.name === 'auto-confirm') {
           const { bookingId } = job.data
-          const { rows } = await query(
-            `SELECT * FROM bookings WHERE id = $1 FOR UPDATE`,
-            [bookingId]
-          )
-          const booking = rows[0]
-          if (!booking || booking.status !== 'awaiting_confirmation') return
-          await query(
-            `UPDATE bookings SET status='completed', completion_confirmed_at = now() WHERE id = $1`,
-            [booking.id]
-          )
+          // Use atomic conditional UPDATE inside a transaction (spec 0081).
+          // The old pool.query FOR UPDATE was a no-op — lock released immediately.
+          const client = await getClient()
+          let booking
+          try {
+            await client.query('BEGIN')
+            const { rows, rowCount } = await client.query(
+              `UPDATE bookings SET status='completed', completion_confirmed_at=now(), auto_confirm_at=NULL
+               WHERE id=$1 AND status='awaiting_confirmation'
+               RETURNING *`,
+              [bookingId]
+            )
+            await client.query('COMMIT')
+            if (!rowCount) return // Already handled by customer or another worker
+            booking = rows[0]
+          } catch (err) {
+            await client.query('ROLLBACK').catch(() => {})
+            throw err
+          } finally {
+            client.release()
+          }
           try {
             const Stripe = (await import('stripe')).default
             const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
@@ -283,20 +294,27 @@ export function startWorker() {
 
         if (job.name === 'barber-no-show-check') {
           const { bookingId } = job.data
-          const { rows } = await query(
-            `SELECT * FROM bookings WHERE id = $1 FOR UPDATE`,
-            [bookingId]
-          )
-          const booking = rows[0]
-          if (!booking || booking.status !== 'accepted') return
-          // Barber accepted but never started. Cancel + refund + flag.
-          await query(
-            `UPDATE bookings
-                SET status='cancelled', cancelled_by='system_no_show',
-                    no_show_party='barber'
-              WHERE id = $1`,
-            [booking.id]
-          )
+          // Atomic conditional UPDATE in a real transaction (spec 0081).
+          const client = await getClient()
+          let booking
+          try {
+            await client.query('BEGIN')
+            const { rows, rowCount } = await client.query(
+              `UPDATE bookings
+                  SET status='cancelled', cancelled_by='system_no_show', no_show_party='barber'
+                WHERE id=$1 AND status='accepted'
+                RETURNING *`,
+              [bookingId]
+            )
+            await client.query('COMMIT')
+            if (!rowCount) return // Already transitioned elsewhere
+            booking = rows[0]
+          } catch (err) {
+            await client.query('ROLLBACK').catch(() => {})
+            throw err
+          } finally {
+            client.release()
+          }
           // Release any authorized hold (no fee, this is the barber's fault).
           try {
             const Stripe = (await import('stripe')).default

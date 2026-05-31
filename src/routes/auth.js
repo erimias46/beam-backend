@@ -17,7 +17,7 @@ const EmailSchema = z.object({ email: z.string().email().max(254).toLowerCase() 
 const OtpSchema   = z.object({
   email: z.string().email().max(254).toLowerCase(),
   code:  z.string().regex(/^\d{6}$/),
-  role:  z.enum(['customer', 'barber', 'admin']).optional().default('customer'),
+  role:  z.enum(['customer', 'barber']).optional().default('customer'),
 })
 
 /* ─── Rate limits (defence-in-depth on top of OTP TTL + attempt cap) ─── */
@@ -27,6 +27,14 @@ const sendOtpLimiter = rateLimit({
   keyGenerator: (req) => `${req.ip}:${(req.body?.email || '').toLowerCase()}`,
   standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many code requests. Try again later.' },
+})
+// Email-only limiter — prevents targeting a single email from rotating IPs
+const sendOtpEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => `email:${(req.body?.email || '').toLowerCase()}`,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many OTP requests for this email. Try again in an hour.' },
 })
 const verifyOtpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -66,7 +74,7 @@ function getTransport() {
 }
 
 /* POST /api/auth/send-otp */
-router.post('/send-otp', sendOtpLimiter, async (req, res, next) => {
+router.post('/send-otp', sendOtpLimiter, sendOtpEmailLimiter, async (req, res, next) => {
   try {
     const { email } = EmailSchema.parse(req.body)
 
@@ -118,7 +126,9 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     }
 
     const masterOtp = process.env.MASTER_OTP
-    const isMaster  = masterOtp && code === masterOtp
+    const isMaster  = process.env.NODE_ENV !== 'production'
+      && process.env.ALLOW_MASTER_OTP === 'true'
+      && masterOtp && code === masterOtp
     if (!isMaster) {
       const stored = await redis.get(`otp:${email}`)
       const ok = stored && timingSafeEq(stored, hashOtp(code))
@@ -160,14 +170,6 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     // Refresh last_active_at (best-effort)
     query('UPDATE users SET last_active_at = NOW() WHERE id = $1', [user.id]).catch(() => {})
 
-    // Legacy 90-day JWT — kept for backward compatibility through the rollout
-    // window (spec 0074). New clients should consume access + refresh instead.
-    const token = jwt.sign(
-      { id: user.id, role: user.role, email: user.email },
-      JWT_SECRET,
-      { expiresIn: '90d' }
-    )
-
     // Spec 0074: mint a short-lived access token + a long-lived refresh token
     // and persist the session. Plaintext refresh is returned once; the DB
     // only stores its sha256 hash.
@@ -181,9 +183,8 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
     })
 
     res.json({
-      token,                                          // legacy
-      access_token,                                   // new (spec 0074)
-      refresh_token,                                  // new (spec 0074)
+      access_token,                                   // spec 0074 — 15-min access token
+      refresh_token,                                  // spec 0074 — rotating refresh
       expires_in: 15 * 60,                            // access TTL
       user: {
         id: user.id, name: user.name, email: user.email, role: user.role,

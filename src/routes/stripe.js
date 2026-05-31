@@ -132,7 +132,7 @@ async function dispatch(event) {
       const pi = event.data.object
       const { rows } = await query(
         `UPDATE bookings
-            SET status = 'paid', payment_state = 'captured'
+            SET status = 'paid', payment_state = 'captured', paid_at = now()
           WHERE stripe_payment_intent_id = $1 AND status = 'completed'
           RETURNING id, customer_id, barber_id, price_cents, receipt_token`,
         [pi.id]
@@ -179,7 +179,7 @@ async function dispatch(event) {
         `UPDATE bookings
             SET status = 'cancelled', payment_state = 'failed'
           WHERE stripe_payment_intent_id = $1
-            AND status IN ('requested','accepted','in_progress','completed')
+            AND status IN ('requested','accepted','in_progress')
           RETURNING id, customer_id`,
         [pi.id]
       )

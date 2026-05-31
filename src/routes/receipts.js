@@ -53,12 +53,23 @@ async function loadByToken(token) {
   return rows[0]
 }
 
+// SEC-8: public endpoint omits emails — anyone with the token can access,
+// so exposing PII (emails) would be a privacy issue.
+function publicShape(booking) {
+  const full = shape(booking)
+  return {
+    ...full,
+    barber:   { id: full.barber.id,   name: full.barber.name },
+    customer: { id: full.customer.id, name: full.customer.name },
+  }
+}
+
 export const publicReceiptRouter = Router()
 publicReceiptRouter.get('/:token', async (req, res, next) => {
   try {
     const booking = await loadByToken(req.params.token)
     if (!booking) return res.status(404).json({ error: 'receipt_not_found' })
-    res.json(shape(booking))
+    res.json(publicShape(booking))
   } catch (err) { next(err) }
 })
 

@@ -1,0 +1,16 @@
+.env
+.env.*
+.git
+.gitignore
+.gitattributes
+node_modules
+uploads
+*.log
+*.md
+coverage
+test
+src/**/__tests__
+src/middleware/__tests__
+src/services/__tests__
+src/routes/__tests__
+src/__tests__

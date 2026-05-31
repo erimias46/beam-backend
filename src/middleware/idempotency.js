@@ -112,9 +112,11 @@ export function idempotency() {
     console.log(`[idempotency] miss ${endpoint} key=${key.slice(0, 8)}…`)
     const originalJson = res.json.bind(res)
     res.json = (body) => {
-      // Don't cache 5xx — let a real retry actually retry. Body can be null
-      // if the route never called res.json (rare, but possible on res.end).
-      if (res.statusCode >= 500 || body == null) {
+      // Don't cache 5xx or actionable 4xx (requires_action, in_flight) — these
+      // are transient states and caching them would brick retries permanently.
+      // MONEY-6: a cached 402/409 means the booking can never be accepted.
+      const SKIP_CACHE = new Set([402, 409])
+      if (res.statusCode >= 500 || SKIP_CACHE.has(res.statusCode) || body == null) {
         query(
           `DELETE FROM idempotency_keys WHERE user_id = $1 AND key = $2 AND status_code IS NULL`,
           [req.user.id, key]

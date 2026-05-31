@@ -171,7 +171,8 @@ customerRefundRouter.post('/:id/refund',
       const booking = rows[0]
       if (!booking) return res.status(404).json({ error: 'booking_not_found' })
       if (booking.customer_id !== req.user.id) return res.status(403).json({ error: 'forbidden' })
-      if (booking.status !== 'paid') {
+      // Allow refund when status='paid' OR payment_state='captured' (webhook may be delayed — spec 0082)
+      if (booking.status !== 'paid' && booking.payment_state !== 'captured') {
         return res.status(403).json({ error: 'refund_only_for_paid', message: 'Refunds via self-service require paid status. Contact support otherwise.' })
       }
       if ((booking.refunded_cents || 0) > 0) {
@@ -179,7 +180,10 @@ customerRefundRouter.post('/:id/refund',
       }
 
       const windowHours = parseInt(await getSetting('refund_window_hours')) || 24
-      const ageMs = Date.now() - new Date(booking.updated_at).getTime()  // proxy for paid_at since payment_intent.succeeded touched updated_at
+      // Use paid_at (set by webhook, migration 078) for precise window anchor.
+      // Falls back to updated_at for bookings paid before migration 078 was applied.
+      const paidAt = booking.paid_at || booking.updated_at
+      const ageMs = Date.now() - new Date(paidAt).getTime()
       if (ageMs > windowHours * 3_600_000) {
         return res.status(403).json({ error: 'refund_window_closed', message: `Self-service refunds are available within ${windowHours} hours of payment.` })
       }
