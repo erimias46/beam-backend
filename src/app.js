@@ -218,6 +218,15 @@ app.get('/metrics', requireAuth, requireRole('admin'), async (_, res, next) => {
   } catch (err) { next(err) }
 })
 
+/* ─── Sentry error capture (spec 0090) ───────────────────── */
+// No-op if SENTRY_DSN is not configured or the package is not installed.
+try {
+  if (process.env.SENTRY_DSN) {
+    const { setupExpressErrorHandler } = await import('@sentry/node')
+    setupExpressErrorHandler(app)
+  }
+} catch { /* sentry not installed — skip */ }
+
 /* ─── 404 ────────────────────────────────────────────────── */
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' })

@@ -55,3 +55,25 @@ jobs:
 
       - name: Test
         run: npm test
+
+  deploy-backend:
+    name: Deploy Backend to Coolify
+    needs: [test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Trigger Coolify deploy
+        run: |
+          curl -f -X POST \
+            "http://178.105.234.189:8000/api/v1/deploy?uuid=c13tqxxi4wzxqitxytwx5non" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}"
+
+      # Requires a DEPLOY_SSH_KEY secret in GitHub (private key whose public
+      # half is in root@178.105.234.189's authorized_keys).
+      - name: Run migrations
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@178.105.234.189 \
+            'docker exec $(docker ps --format "{{.Names}}" | grep c13tqxxi4wzxqitxytwx5non | head -1) npm run migrate'

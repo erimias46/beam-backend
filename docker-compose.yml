@@ -18,6 +18,11 @@ services:
     networks:
       - beam0_network
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   postgres:
     image: postgres:16-alpine
