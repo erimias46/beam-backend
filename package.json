@@ -8,10 +8,10 @@
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
     "migrate": "node src/db/migrate.js",
-    "test": "node --test --test-concurrency=1 --test-reporter=spec",
-    "test:unit": "node --test --test-reporter=spec --test-path-pattern='(middleware|services)/__tests__'",
-    "test:integration": "node --test --test-concurrency=1 --test-reporter=spec --test-path-pattern='(routes/__tests__|integration)'",
-    "test:watch": "node --test --watch --test-concurrency=1"
+    "test": "node --test --test-concurrency=1 --test-reporter=spec $(find src -name '*.test.js' | sort)",
+    "test:unit": "node --test --test-reporter=spec $(find src/middleware src/services -name '*.test.js' | sort)",
+    "test:integration": "node --test --test-concurrency=1 --test-reporter=spec $(find src/routes src/__tests__/integration -name '*.test.js' | sort)",
+    "test:watch": "node --test --watch --test-concurrency=1 $(find src -name '*.test.js' | sort)"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1054.0",
