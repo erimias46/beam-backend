@@ -34,45 +34,49 @@ function validToken(payload = { id: 'u1', role: 'customer', email: 'a@b.com' }) 
 
 /* ─── requireAuth ─────────────────────────────────────── */
 
-test('requireAuth passes with valid token', () => {
+// requireAuth is async (makes a DB check for token_valid_after) — all tests must await it.
+// When no DB is available (unit tests), the token_valid_after check throws and is swallowed,
+// so valid tokens still pass through.
+
+test('requireAuth passes with valid token', async () => {
   const req  = makeReq(validToken())
   const res  = makeRes()
   let called = false
-  requireAuth(req, res, () => { called = true })
+  await requireAuth(req, res, () => { called = true })
   assert.ok(called)
   assert.ok(req.user)
   assert.equal(req.user.role, 'customer')
 })
 
-test('requireAuth returns 401 with no token', () => {
+test('requireAuth returns 401 with no token', async () => {
   const req = makeReq(null)
   const res = makeRes()
-  requireAuth(req, res, () => {})
+  await requireAuth(req, res, () => {})
   const { status, body } = res._get()
   assert.equal(status, 401)
   assert.ok(body.error)
 })
 
-test('requireAuth returns 401 with expired token', () => {
+test('requireAuth returns 401 with expired token', async () => {
   const token = jwt.sign({ id: 'u1', role: 'customer', email: 'a@b.com' }, SECRET, { expiresIn: '-1s' })
   const req   = makeReq(token)
   const res   = makeRes()
-  requireAuth(req, res, () => {})
+  await requireAuth(req, res, () => {})
   assert.equal(res._get().status, 401)
 })
 
-test('requireAuth returns 401 with wrong secret', () => {
+test('requireAuth returns 401 with wrong secret', async () => {
   const token = jwt.sign({ id: 'u1', role: 'customer', email: 'a@b.com' }, 'wrong-secret', { expiresIn: '1h' })
   const req   = makeReq(token)
   const res   = makeRes()
-  requireAuth(req, res, () => {})
+  await requireAuth(req, res, () => {})
   assert.equal(res._get().status, 401)
 })
 
-test('requireAuth returns 401 with malformed token', () => {
+test('requireAuth returns 401 with malformed token', async () => {
   const req = makeReq('not.a.token')
   const res = makeRes()
-  requireAuth(req, res, () => {})
+  await requireAuth(req, res, () => {})
   assert.equal(res._get().status, 401)
 })
 

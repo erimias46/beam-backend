@@ -6,7 +6,7 @@ import nodemailer from 'nodemailer'
 import { Redis } from 'ioredis'
 import { rateLimit } from 'express-rate-limit'
 import { query } from '../db/index.js'
-import { JWT_SECRET } from '../middleware/auth.js'
+import { JWT_SECRET, requireAuth } from '../middleware/auth.js'
 import { getSetting } from '../services/settings.js'
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', { lazyConnect: true })
@@ -198,21 +198,17 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
 })
 
 /* PATCH /api/auth/profile — update own name */
-router.patch('/profile', async (req, res, next) => {
+router.patch('/profile', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
     const { name } = z.object({ name: z.string().min(1).max(100).trim() }).parse(req.body)
     const { rows } = await query(
       `UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, role`,
-      [name, payload.id]
+      [name, req.user.id]
     )
     if (!rows[0]) return res.status(404).json({ error: 'User not found' })
     res.json({ user: rows[0] })
   } catch (err) {
     if (err.name === 'ZodError') return res.status(400).json({ error: err.errors })
-    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid token' })
     next(err)
   }
 })
@@ -221,11 +217,8 @@ router.patch('/profile', async (req, res, next) => {
    Users with any paid bookings in the past 7 years are soft-deleted
    (anonymized) so the financial record survives. Others are hard-deleted.
    Caller can optionally include { reason, notes } for our records. */
-router.delete('/account', async (req, res, next) => {
+router.delete('/account', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
     const reason = String(req.body?.reason || '').slice(0, 60) || null
 
     const { rows } = await query(
@@ -233,7 +226,7 @@ router.delete('/account', async (req, res, next) => {
         WHERE (customer_id = $1 OR barber_id = $1)
           AND status IN ('paid','completed')
           AND created_at > now() - interval '7 years'`,
-      [payload.id]
+      [req.user.id]
     )
     const hasFinancialHistory = (rows[0]?.n ?? 0) > 0
 
@@ -248,21 +241,20 @@ router.delete('/account', async (req, res, next) => {
                 deleted_at = now(),
                 deleted_reason = $2
           WHERE id = $1`,
-        [payload.id, reason]
+        [req.user.id, reason]
       )
       // CASCADE wipes saved_addresses, push_subscriptions, blocks, favorites,
       // chat_messages (body remains via UPDATE on next migration if needed).
-      await query(`DELETE FROM saved_addresses    WHERE user_id = $1`, [payload.id]).catch(() => {})
-      await query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [payload.id]).catch(() => {})
-      await query(`DELETE FROM user_blocks        WHERE blocker_id = $1 OR blocked_id = $1`, [payload.id]).catch(() => {})
+      await query(`DELETE FROM saved_addresses    WHERE user_id = $1`, [req.user.id]).catch(() => {})
+      await query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [req.user.id]).catch(() => {})
+      await query(`DELETE FROM user_blocks        WHERE blocker_id = $1 OR blocked_id = $1`, [req.user.id]).catch(() => {})
       return res.json({ ok: true, mode: 'soft_deleted' })
     }
 
     // No financial history — true hard delete via CASCADE.
-    await query(`DELETE FROM users WHERE id = $1`, [payload.id])
+    await query(`DELETE FROM users WHERE id = $1`, [req.user.id])
     res.json({ ok: true, mode: 'hard_deleted' })
   } catch (err) {
-    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid token' })
     next(err)
   }
 })
@@ -270,12 +262,9 @@ router.delete('/account', async (req, res, next) => {
 /* POST /api/auth/export — request a JSON snapshot of all my data (spec 0061).
    Returns the snapshot inline for v1 (small data). When sizes grow, switch
    to an async job + emailed signed download URL. */
-router.post('/export', async (req, res, next) => {
+router.post('/export', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
-    const id = payload.id
+    const id = req.user.id
 
     const [user, bookings, addresses, reviews, ratings, consents, pushSubs, blocks, favorites] = await Promise.all([
       query(`SELECT id, name, email, role, created_at FROM users WHERE id = $1`, [id]),
@@ -304,64 +293,53 @@ router.post('/export', async (req, res, next) => {
       favorites:   favorites.rows,
     })
   } catch (err) {
-    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid token' })
     next(err)
   }
 })
 
 /* GET /api/auth/me — current user (used to refresh state after login) */
-router.get('/me', async (req, res, next) => {
+router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
     const { rows } = await query(
       `SELECT id, name, email, role, is_suspended, stripe_account_id, email_notifications,
               push_prompt_accepted_at, push_prompt_dismissed_at
          FROM users WHERE id = $1`,
-      [payload.id]
+      [req.user.id]
     )
     if (!rows[0] || rows[0].is_suspended) return res.status(401).json({ error: 'Invalid session' })
     res.json({ user: rows[0] })
-  } catch {
-    res.status(401).json({ error: 'Invalid token' })
+  } catch (err) {
+    next(err)
   }
 })
 
 /* PATCH /api/auth/push-prompt — record the user's in-app push prompt response.
    See specs/0032-push-permission-ux.md. Frontend tracks the state via the
    timestamps to decide re-prompt cadence (default 30 days after dismiss). */
-router.patch('/push-prompt', async (req, res, next) => {
+router.patch('/push-prompt', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
     const action = req.body?.action
     if (action !== 'dismissed' && action !== 'accepted') {
       return res.status(400).json({ error: 'invalid_action' })
     }
     const column = action === 'accepted' ? 'push_prompt_accepted_at' : 'push_prompt_dismissed_at'
-    await query(`UPDATE users SET ${column} = now() WHERE id = $1`, [payload.id])
+    await query(`UPDATE users SET ${column} = now() WHERE id = $1`, [req.user.id])
     res.json({ ok: true })
-  } catch {
-    res.status(401).json({ error: 'Invalid token' })
+  } catch (err) {
+    next(err)
   }
 })
 
 /* PATCH /api/auth/notifications — update email notification preference */
-router.patch('/notifications', async (req, res, next) => {
+router.patch('/notifications', requireAuth, async (req, res, next) => {
   try {
-    const header = req.headers.authorization
-    if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing token' })
-    const payload = jwt.verify(header.slice(7), JWT_SECRET)
     const { email_notifications } = req.body
     await query(
       `UPDATE users SET email_notifications = $1 WHERE id = $2`,
-      [!!email_notifications, payload.id]
+      [!!email_notifications, req.user.id]
     )
     res.json({ ok: true })
   } catch (err) {
-    if (err.name === 'JsonWebTokenError') return res.status(401).json({ error: 'Invalid token' })
     next(err)
   }
 })

@@ -169,6 +169,19 @@ async function scheduleStripeWebhookRetry() {
   }
 }
 
+// Spec 0091: Stripe reconciliation sweep every 10 minutes.
+async function scheduleReconciliationSweep() {
+  try {
+    await getQueue().add('reconciliation-sweep', {}, {
+      repeat: { every: 10 * 60 * 1000 },
+      removeOnComplete: 5,
+      removeOnFail: 3,
+    })
+  } catch (err) {
+    console.warn('[Queue] Could not schedule reconciliation-sweep:', err.message)
+  }
+}
+
 // Spec 0073: nightly-ish (every 6h) email sweep.
 async function scheduleEmailSweep() {
   try {
@@ -392,6 +405,12 @@ export function startWorker() {
           return
         }
 
+        if (job.name === 'reconciliation-sweep') {
+          const { runReconciliation } = await import('./reconciliation.js')
+          await runReconciliation()
+          return
+        }
+
         if (job.name === 'auto-complete') {
           const { bookingId } = job.data
           const { rows } = await query(
@@ -428,6 +447,7 @@ export function startWorker() {
     scheduleStripeWebhookRetry().catch(() => {})
     scheduleBarberOfflineSweep().catch(() => {})
     scheduleEmailSweep().catch(() => {})
+    scheduleReconciliationSweep().catch(() => {})
   } catch (err) {
     console.warn('[Queue] Could not start worker (Redis not available):', err.message)
   }

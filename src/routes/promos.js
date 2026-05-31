@@ -51,7 +51,7 @@ function computeDiscount(promo, totalCents) {
 }
 
 /** Server-side validation that doesn't reserve. */
-async function checkPromo(code, userId, totalCents) {
+export async function checkPromo(code, userId, totalCents) {
   const { rows } = await query(`SELECT * FROM promos WHERE code = $1`, [code.toUpperCase()])
   const promo = rows[0]
   if (!promo)          return { applies: false, reason: 'not_found' }
@@ -219,7 +219,8 @@ export async function applyCredit({ userId, amount, source, sourceRef }) {
     const expiresAt = amount > 0 ? new Date(Date.now() + CREDIT_EXPIRY_MONTHS * 30 * 86400_000).toISOString() : null
     await client.query(
       `INSERT INTO user_credits (user_id, amount_cents, source, source_ref, balance_after_cents, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, source, source_ref) DO NOTHING`,
       [userId, amount, source, sourceRef ?? null, newBalance, expiresAt]
     )
     await client.query('COMMIT')
@@ -241,28 +242,47 @@ export async function redeemPromoIfValid({ code, userId, bookingTotalCents, book
   const client = await getClient()
   try {
     await client.query('BEGIN')
-    // Atomic increment with cap check.
-    const { rows } = await client.query(
-      `UPDATE promos
-          SET redemptions_used = redemptions_used + 1
-        WHERE code = $1
-          AND is_active = true
-          AND (redemptions_max IS NULL OR redemptions_used < redemptions_max)
-        RETURNING code, referral_owner_id`,
-      [check.promo.code]
-    )
-    if (!rows.length) { await client.query('ROLLBACK'); return 0 }
-    await client.query(
-      `INSERT INTO promo_redemptions (promo_code, user_id, booking_id, discount_cents)
-       VALUES ($1, $2, $3, $4)`,
-      [check.promo.code, userId, bookingId ?? null, check.discount_cents]
-    )
+    const discount = await redeemPromoWithClient(client, check, userId, bookingId)
+    if (discount === 0) { await client.query('ROLLBACK'); return 0 }
     await client.query('COMMIT')
-    return check.discount_cents
+    return discount
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {})
     return 0
   } finally { client.release() }
+}
+
+/** Variant that participates in an existing transaction. The caller owns
+ *  BEGIN/COMMIT/ROLLBACK. Accepts either a pre-computed checkPromo result or
+ *  runs the check inline if rawCheck is null. Returns discount_cents (0 on
+ *  failure/not-applicable). */
+export async function redeemPromoWithClient(client, checkOrPromoCode, userId, bookingId) {
+  // Allow callers to pass a raw code string; run the check ourselves in that case.
+  let check = checkOrPromoCode
+  if (typeof checkOrPromoCode === 'string') {
+    check = await checkPromo(checkOrPromoCode, userId, 0) // totalCents already baked into discount
+    // Callers using raw code should call checkPromo first and pass the result.
+    // This branch is a safety fallback — discount may be 0.
+  }
+  if (!check || !check.applies) return 0
+
+  // Atomic increment with cap check.
+  const { rows } = await client.query(
+    `UPDATE promos
+        SET redemptions_used = redemptions_used + 1
+      WHERE code = $1
+        AND is_active = true
+        AND (redemptions_max IS NULL OR redemptions_used < redemptions_max)
+      RETURNING code, referral_owner_id`,
+    [check.promo.code]
+  )
+  if (!rows.length) return 0
+  await client.query(
+    `INSERT INTO promo_redemptions (promo_code, user_id, booking_id, discount_cents)
+     VALUES ($1, $2, $3, $4)`,
+    [check.promo.code, userId, bookingId ?? null, check.discount_cents]
+  )
+  return check.discount_cents
 }
 
 /** Credit a referral owner when the referee's first booking completes.

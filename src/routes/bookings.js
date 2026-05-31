@@ -7,6 +7,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
+import { Redis } from 'ioredis'
 import { query, getClient } from '../db/index.js'
 import { requireAuth, requireRole, JWT_SECRET } from '../middleware/auth.js'
 import { assertTransition } from '../middleware/booking-fsm.js'
@@ -15,12 +16,14 @@ import { getCancellationFee } from '../services/cancellation-policy.js'
 import { blockExistsBetween } from './reports.js'
 import { clearLocationForBooking } from './location.js'
 import { pointInPolygon } from './barber-ops.js'
-import { redeemPromoIfValid } from './promos.js'
+import { redeemPromoIfValid, redeemPromoWithClient, checkPromo } from './promos.js'
 import { scheduleBarberNoShowCheck, cancelBarberNoShowCheck, scheduleAutoConfirm, cancelAutoConfirm } from '../services/queue.js'
 import { sendNotification } from '../services/notifications.js'
 import { scheduleAutoCancel, cancelAutoCancel, scheduleAutoComplete, cancelAutoComplete } from '../services/queue.js'
 import { addClient, removeClient, emitToUsers } from '../services/sse.js'
 import { getPlatformFeeBps, getBarberShare } from '../config.js'
+
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', { lazyConnect: true })
 
 // Completion photo upload (spec 0023). Same disk-based pattern as barber
 // profile photos. 5 MB cap, JPG/PNG/WebP only.
@@ -73,18 +76,38 @@ async function logEvent(client, bookingId, actorId, from, to, meta) {
   }
 }
 
+/* POST /api/bookings/sse-ticket — issue a single-use 60s SSE nonce (spec 0087) */
+router.post('/sse-ticket', requireAuth, async (req, res, next) => {
+  try {
+    const { randomBytes } = await import('crypto')
+    const nonce = randomBytes(32).toString('hex')
+    // Store in Redis with 60s TTL, value = user ID
+    const redisKey = `sse:${nonce}`
+    await redis.setex(redisKey, 60, req.user.id)
+    res.json({ ticket: nonce })
+  } catch (err) { next(err) }
+})
+
 /* GET /api/bookings/events  — Server-Sent Events stream for real-time status pushes */
 router.get('/events', async (req, res) => {
-  // EventSource can't set headers; accept token via query param as fallback
-  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token
-  if (!token) return res.status(401).end()
-
   let userId
-  try {
-    const payload = jwt.verify(token, JWT_SECRET)
-    userId = payload.sub || payload.id
-  } catch {
-    return res.status(401).end()
+
+  // Spec 0087: prefer single-use ticket over raw JWT in query string
+  const ticketParam = req.query.ticket
+  if (ticketParam && ticketParam.length === 64) {
+    const storedUserId = await redis.getdel(`sse:${ticketParam}`)
+    if (!storedUserId) return res.status(401).end()
+    userId = storedUserId
+  } else {
+    // EventSource can't set headers; accept token via query param as fallback
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token
+    if (!token) return res.status(401).end()
+    try {
+      const payload = jwt.verify(token, JWT_SECRET)
+      userId = payload.sub || payload.id
+    } catch {
+      return res.status(401).end()
+    }
   }
 
   res.setHeader('Content-Type',  'text/event-stream')
@@ -182,40 +205,55 @@ router.post('/', requireAuth, requireRole('customer', 'facility'), idempotency()
     }
 
     let booking
+    const bookingClient = await getClient()
     try {
-      const result = await query(
-        `INSERT INTO bookings (customer_id, barber_id, address, lat, lng, scheduled_at, service_type, price_cents, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [
-          req.user.id, data.barber_id, data.address, data.lat, data.lng,
-          data.scheduled_at, data.service_type, data.price_cents, data.notes,
-        ]
-      )
-      booking = result.rows[0]
-    } catch (err) {
-      // bookings_barber_active_slot_idx — barber already has an active booking at this time
-      if (err.code === '23505') {
-        return res.status(409).json({ error: 'Barber already booked at this time' })
+      await bookingClient.query('BEGIN')
+
+      let insertResult
+      try {
+        insertResult = await bookingClient.query(
+          `INSERT INTO bookings (customer_id, barber_id, address, lat, lng, scheduled_at, service_type, price_cents, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          [
+            req.user.id, data.barber_id, data.address, data.lat, data.lng,
+            data.scheduled_at, data.service_type, data.price_cents, data.notes,
+          ]
+        )
+      } catch (err) {
+        await bookingClient.query('ROLLBACK').catch(() => {})
+        bookingClient.release()
+        // bookings_barber_active_slot_idx — barber already has an active booking at this time
+        if (err.code === '23505') {
+          return res.status(409).json({ error: 'Barber already booked at this time' })
+        }
+        throw err
       }
+      booking = insertResult.rows[0]
+
+      // Spec 0070 / MONEY-9: redeem promo inside the booking insert transaction
+      // so the redemption and booking row are committed atomically.
+      if (data.promo_code) {
+        const promoCheck = await checkPromo(data.promo_code, req.user.id, data.price_cents)
+        const discount = promoCheck.applies
+          ? await redeemPromoWithClient(bookingClient, promoCheck, req.user.id, booking.id)
+          : 0
+        if (discount > 0) {
+          await bookingClient.query(
+            `UPDATE bookings SET promo_code = $2, promo_discount_cents = $3 WHERE id = $1`,
+            [booking.id, data.promo_code.toUpperCase(), discount]
+          )
+          booking.promo_code           = data.promo_code.toUpperCase()
+          booking.promo_discount_cents = discount
+        }
+      }
+
+      await bookingClient.query('COMMIT')
+    } catch (err) {
+      await bookingClient.query('ROLLBACK').catch(() => {})
+      bookingClient.release()
       throw err
     }
-
-    // Spec 0070: redeem promo if any. Discount tracked on booking row; the
-    // PI's amount at /accept will be price_cents - promo_discount_cents.
-    if (data.promo_code) {
-      const discount = await redeemPromoIfValid({
-        code: data.promo_code, userId: req.user.id,
-        bookingTotalCents: data.price_cents, bookingId: booking.id,
-      })
-      if (discount > 0) {
-        await query(
-          `UPDATE bookings SET promo_code = $2, promo_discount_cents = $3 WHERE id = $1`,
-          [booking.id, data.promo_code.toUpperCase(), discount]
-        )
-        booking.promo_code           = data.promo_code.toUpperCase()
-        booking.promo_discount_cents = discount
-      }
-    }
+    bookingClient.release()
 
     await logEvent(null, booking.id, req.user.id, null, 'requested', null)
 
@@ -427,8 +465,8 @@ router.patch('/:id/accept', requireAuth, requireRole('barber'), idempotency(), a
       }
 
       await client.query(
-        'UPDATE bookings SET stripe_payment_intent_id = $1 WHERE id = $2',
-        [paymentIntentId, booking.id]
+        'UPDATE bookings SET stripe_payment_intent_id = $1, service_payment_method_id = $2 WHERE id = $3',
+        [paymentIntentId, pmId, booking.id]
       )
     }
 
@@ -623,6 +661,7 @@ router.patch('/:id/confirm', requireAuth, requireRole('customer'), idempotency()
 
     // Tipping (spec 0042). Separate PI so refund math stays clean. Capture
     // immediate, no application fee, transfer 100% to barber Connect account.
+    let extraFields = {}
     if (stripe && tipCents > 0) {
       try {
         const { rows: cu } = await query(
@@ -633,7 +672,8 @@ router.patch('/:id/confirm', requireAuth, requireRole('customer'), idempotency()
         )
         const customerId  = cu[0]?.stripe_customer_id
         const barberAcct  = cu[0]?.stripe_account_id
-        const pmId        = cu[0]?.default_payment_method_id
+        // MONEY-8: prefer the PM used for the service charge; fall back to default.
+        const pmId = booking.service_payment_method_id || cu[0]?.default_payment_method_id
         if (customerId && barberAcct && pmId) {
           const tipPi = await stripe.paymentIntents.create({
             amount: tipCents,
@@ -647,10 +687,12 @@ router.patch('/:id/confirm', requireAuth, requireRole('customer'), idempotency()
           }, { idempotencyKey: `booking_tip_${booking.id}` })
           await query(`UPDATE bookings SET tip_payment_intent_id = $1 WHERE id = $2`, [tipPi.id, booking.id])
         }
-      } catch (err) {
+      } catch (tipErr) {
         // Tip failure does NOT roll back the booking — service charge is captured,
-        // tip is best-effort. Surface to admin via the same notification fanout.
-        console.warn('[tip PI failed]', err.message)
+        // tip is best-effort. Log a booking_event so admins can follow up.
+        await logEvent(null, booking.id, req.user.id, 'completed', 'completed',
+          { type: 'tip_failed', error: tipErr.message }).catch(() => {})
+        extraFields = { ...extraFields, tip_failed: true }
       }
     }
 
@@ -788,11 +830,14 @@ router.patch('/:id/cancel', requireAuth, idempotency(), async (req, res, next) =
 
     let feeCharged = false
     if (stripe && booking.stripe_payment_intent_id && booking.status === 'accepted') {
-      if (fee.fee_cents > 0) {
+      // MONEY-5: fee can't exceed what was actually authorized (price minus any promo discount).
+      const authorizedAmount = booking.price_cents - (booking.promo_discount_cents || 0)
+      const feeToCapture = Math.min(fee.fee_cents, authorizedAmount)
+      if (feeToCapture > 0) {
         // Partial capture for the fee; Stripe auto-releases the rest of the hold.
         try {
           await stripe.paymentIntents.capture(booking.stripe_payment_intent_id, {
-            amount_to_capture: fee.fee_cents,
+            amount_to_capture: feeToCapture,
           }, { idempotencyKey: `booking_cancel_fee_${booking.id}` })
           feeCharged = true
         } catch (err) {
