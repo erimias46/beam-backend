@@ -83,6 +83,12 @@ sessionsRouter.post('/refresh', async (req, res, next) => {
       userAgent:   (req.headers['user-agent'] || '').slice(0, 500),
     })
     const access = mintAccessToken({ id: row.user_id, role: row.role, email: row.email })
+    res.cookie('access_token', access, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: ACCESS_TTL_SECONDS * 1000,
+    })
     res.json({
       access_token:  access,
       refresh_token: newPlain,
@@ -100,6 +106,11 @@ sessionsRouter.post('/logout', requireAuth, async (req, res, next) => {
         [hashRefresh(plain), req.user.id]
       )
     }
+    res.clearCookie('access_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+    })
     res.json({ ok: true })
   } catch (err) { next(err) }
 })

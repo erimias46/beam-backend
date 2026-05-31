@@ -209,6 +209,8 @@ export async function applyCredit({ userId, amount, source, sourceRef }) {
   const client = await getClient()
   try {
     await client.query('BEGIN')
+    // Serialize all credit operations for this user to prevent overdraw races.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [userId])
     const { rows: bal } = await client.query(
       `SELECT COALESCE(SUM(amount_cents),0)::int AS b
          FROM user_credits WHERE user_id = $1
@@ -220,7 +222,7 @@ export async function applyCredit({ userId, amount, source, sourceRef }) {
     await client.query(
       `INSERT INTO user_credits (user_id, amount_cents, source, source_ref, balance_after_cents, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (user_id, source, source_ref) DO NOTHING`,
+       ON CONFLICT (user_id, source, source_ref) WHERE source_ref IS NOT NULL DO NOTHING`,
       [userId, amount, source, sourceRef ?? null, newBalance, expiresAt]
     )
     await client.query('COMMIT')

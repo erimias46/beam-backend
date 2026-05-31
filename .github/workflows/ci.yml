@@ -61,6 +61,10 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Requires a "production" environment configured in GitHub → Settings → Environments.
+    # Add required reviewers there to enforce a manual approval gate before deploying.
+    # Also disable Coolify's own git-push auto-deploy so this CI job is the only deploy path.
+    environment: production
     steps:
       - name: Trigger Coolify deploy
         run: |

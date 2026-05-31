@@ -8,10 +8,11 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) {
+  // Accept Bearer token (mobile/API clients) or httpOnly cookie (web clients).
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : req.cookies?.access_token
+  if (!token) {
     return res.status(401).json({ error: 'Missing token', code: 'MISSING_TOKEN' })
   }
-  const token = header.slice(7)
   let payload
   try {
     payload = jwt.verify(token, JWT_SECRET)

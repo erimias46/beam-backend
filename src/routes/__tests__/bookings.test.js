@@ -241,6 +241,112 @@ test('FSM: cannot accept a cancelled booking', { skip }, async () => {
   assert.ok(r.status === 422 || r.status === 402) // 422 FSM or 402 Stripe not set up
 })
 
+/* ─── PATCH /api/bookings/:id/accept — MONEY-4 atomic FSM ─ */
+
+test('MONEY-4: accept — 422 or 409 when booking is already declined (not requested)', { skip }, async () => {
+  await resetDb()
+  const customer = await seedUser({ role: 'customer' })
+  const barber   = await seedBarber()
+  const app      = await getApp()
+  const { body: { booking } } = await createBooking(app, customer, barber)
+
+  // Simulate another path (e.g. customer cancel) changing status before accept fires
+  await testPool.query(`UPDATE bookings SET status = 'declined' WHERE id = $1`, [booking.id])
+
+  const r = await request(app)
+    .patch(`/api/bookings/${booking.id}/accept`)
+    .set('Authorization', `Bearer ${jwtFor(barber)}`)
+  // FSM pre-check (assertTransition) returns 422; atomic WHERE guard returns 409
+  assert.ok(
+    r.status === 422 || r.status === 409,
+    `expected 422/409 on non-requested booking, got ${r.status}: ${JSON.stringify(r.body)}`
+  )
+})
+
+test('MONEY-4: accept — 422 or 409 when booking is already cancelled', { skip }, async () => {
+  await resetDb()
+  const customer = await seedUser({ role: 'customer' })
+  const barber   = await seedBarber()
+  const app      = await getApp()
+  const { body: { booking } } = await createBooking(app, customer, barber)
+
+  // Customer cancels before barber can accept
+  await request(app)
+    .patch(`/api/bookings/${booking.id}/cancel`)
+    .set('Authorization', `Bearer ${jwtFor(customer)}`)
+
+  const r = await request(app)
+    .patch(`/api/bookings/${booking.id}/accept`)
+    .set('Authorization', `Bearer ${jwtFor(barber)}`)
+  assert.ok(
+    r.status === 422 || r.status === 409,
+    `expected 422/409 for cancelled booking, got ${r.status}: ${JSON.stringify(r.body)}`
+  )
+})
+
+test('MONEY-4: free accept — 200 and status becomes accepted when fully discounted', { skip }, async () => {
+  await resetDb()
+  const customer = await seedUser({ role: 'customer' })
+  const barber   = await seedBarber()
+  const app      = await getApp()
+
+  // Mark barber identity verified so the identity gate doesn't block this test
+  await testPool.query(
+    `UPDATE barber_profiles SET identity_status = 'verified' WHERE user_id = $1`,
+    [barber.id]
+  )
+
+  // price_cents > 0 enforced by DB; make it free via a full promo_discount_cents match
+  const { rows: [booking] } = await testPool.query(
+    `INSERT INTO bookings
+       (customer_id, barber_id, address, scheduled_at, service_type,
+        price_cents, promo_discount_cents, status)
+     VALUES ($1, $2, '1 Test St', NOW() + INTERVAL '2 hours', 'Fade',
+             4000, 4000, 'requested')
+     RETURNING *`,
+    [customer.id, barber.id]
+  )
+
+  const r = await request(app)
+    .patch(`/api/bookings/${booking.id}/accept`)
+    .set('Authorization', `Bearer ${jwtFor(barber)}`)
+  // chargeable = 4000 - 4000 = 0 → free path, no Stripe PI needed
+  assert.equal(r.status, 200, `free accept should return 200, got ${r.status}: ${JSON.stringify(r.body)}`)
+  assert.ok(r.body.free === true || r.body.status === 'accepted', 'should be marked as free accepted booking')
+
+  const { rows: [updated] } = await testPool.query('SELECT status FROM bookings WHERE id = $1', [booking.id])
+  assert.equal(updated.status, 'accepted', 'booking status must be accepted in DB')
+})
+
+test('MONEY-4: free accept — 409 when a concurrent update already accepted the booking', { skip }, async () => {
+  await resetDb()
+  const customer = await seedUser({ role: 'customer' })
+  const barber   = await seedBarber()
+  const app      = await getApp()
+
+  const { rows: [booking] } = await testPool.query(
+    `INSERT INTO bookings
+       (customer_id, barber_id, address, scheduled_at, service_type,
+        price_cents, promo_discount_cents, status)
+     VALUES ($1, $2, '1 Test St', NOW() + INTERVAL '2 hours', 'Fade',
+             4000, 4000, 'requested')
+     RETURNING *`,
+    [customer.id, barber.id]
+  )
+
+  // Simulate a concurrent accept: another request already moved it to 'accepted'
+  await testPool.query(`UPDATE bookings SET status = 'accepted' WHERE id = $1`, [booking.id])
+
+  const r = await request(app)
+    .patch(`/api/bookings/${booking.id}/accept`)
+    .set('Authorization', `Bearer ${jwtFor(barber)}`)
+  // FSM rejects 'accepted → accepted' (422), or atomic WHERE returns 0 rowCount (409)
+  assert.ok(
+    r.status === 422 || r.status === 409,
+    `expected 422/409 when already accepted, got ${r.status}: ${JSON.stringify(r.body)}`
+  )
+})
+
 /* ─── Health endpoints ─────────────────────────────────── */
 
 test('GET /health — returns ok', { skip }, async () => {

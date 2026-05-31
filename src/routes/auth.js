@@ -182,6 +182,14 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res, next) => {
       deviceLabel: req.headers['user-agent']?.slice(0, 80) || null,
     })
 
+    // FE-1: also deliver the access token as an httpOnly cookie for web clients.
+    // Mobile clients continue to use the JSON body; both paths are supported.
+    res.cookie('access_token', access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60 * 1000,
+    })
     res.json({
       access_token,                                   // spec 0074 — 15-min access token
       refresh_token,                                  // spec 0074 — rotating refresh

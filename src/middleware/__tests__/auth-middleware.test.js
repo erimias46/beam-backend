@@ -108,6 +108,53 @@ test('optionalAuth continues with invalid token (no crash)', () => {
   assert.ok(called)
 })
 
+/* ─── requireAuth — cookie auth (FE-1 fix) ───────────── */
+
+test('requireAuth passes with valid httpOnly cookie (no Bearer header)', async () => {
+  const token = validToken()
+  const req   = { headers: {}, cookies: { access_token: token } }
+  const res   = makeRes()
+  let called  = false
+  await requireAuth(req, res, () => { called = true })
+  assert.ok(called, 'next() should be called')
+  assert.ok(req.user, 'req.user should be populated from cookie token')
+  assert.equal(req.user.role, 'customer')
+})
+
+test('requireAuth Bearer header takes precedence over cookie', async () => {
+  const bearerJwt = validToken({ id: 'bearer-u', role: 'barber',   email: 'b@b.com' })
+  const cookieJwt = validToken({ id: 'cookie-u', role: 'customer', email: 'c@b.com' })
+  const req = {
+    headers: { authorization: `Bearer ${bearerJwt}` },
+    cookies: { access_token: cookieJwt },
+  }
+  const res = makeRes()
+  await requireAuth(req, res, () => {})
+  assert.equal(req.user?.id, 'bearer-u', 'Bearer token should win when both are present')
+})
+
+test('requireAuth returns 401 with neither Bearer nor cookie', async () => {
+  const req = { headers: {}, cookies: {} }
+  const res = makeRes()
+  await requireAuth(req, res, () => {})
+  assert.equal(res._get().status, 401)
+})
+
+test('requireAuth returns 401 with invalid cookie token', async () => {
+  const req = { headers: {}, cookies: { access_token: 'not.a.valid.jwt' } }
+  const res = makeRes()
+  await requireAuth(req, res, () => {})
+  assert.equal(res._get().status, 401)
+})
+
+test('requireAuth returns 401 with expired cookie token', async () => {
+  const expired = jwt.sign({ id: 'u1', role: 'customer', email: 'a@b.com' }, SECRET, { expiresIn: '-1s' })
+  const req = { headers: {}, cookies: { access_token: expired } }
+  const res = makeRes()
+  await requireAuth(req, res, () => {})
+  assert.equal(res._get().status, 401)
+})
+
 /* ─── requireRole ─────────────────────────────────────── */
 
 test('requireRole passes when role matches', () => {

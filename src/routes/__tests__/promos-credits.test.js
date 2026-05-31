@@ -134,7 +134,7 @@ test('Admin grants credits, balance increases', { skip }, async () => {
   const customer = await seedUser({ role: 'customer' })
   const app      = await getApp()
 
-  const idempKey = `grant-${Date.now()}`
+  const idempKey = `grant-test-existing-${Date.now()}`
   const gr = await request(app)
     .post('/api/admin/credits/grant')
     .set('Authorization', `Bearer ${jwtFor(admin)}`)
@@ -146,6 +146,114 @@ test('Admin grants credits, balance increases', { skip }, async () => {
     .get('/api/credits/balance')
     .set('Authorization', `Bearer ${jwtFor(customer)}`)
   assert.ok((br.body.balance_cents ?? 0) >= 1500)
+})
+
+/* ─── DB-2: applyCredit advisory lock tests ─────────── */
+
+test('DB-2: applyCredit — sequential grants accumulate balance correctly', { skip }, async () => {
+  await resetDb()
+  const admin    = await seedUser({ role: 'admin' })
+  const customer = await seedUser({ role: 'customer' })
+  const app      = await getApp()
+  const now      = Date.now()
+
+  for (const [i, amount] of [[1, 500], [2, 750], [3, 250]]) {
+    const r = await request(app)
+      .post('/api/admin/credits/grant')
+      .set('Authorization', `Bearer ${jwtFor(admin)}`)
+      .set('Idempotency-Key', `seq-credit-grant-${now}-${i}`)
+      .send({ user_id: customer.id, amount_cents: amount, notes: `seq-${now}-${i}` })
+    assert.ok(r.status === 200 || r.status === 201, `grant ${i} failed: ${JSON.stringify(r.body)}`)
+  }
+
+  const bal = await request(app)
+    .get('/api/credits/balance')
+    .set('Authorization', `Bearer ${jwtFor(customer)}`)
+  assert.equal(bal.body.balance_cents, 1500, `expected 1500 accumulated, got ${bal.body.balance_cents}`)
+})
+
+test('DB-2: applyCredit — same source+ref is idempotent (ON CONFLICT DO NOTHING)', { skip }, async () => {
+  // applyCredit uses ON CONFLICT (user_id, source, source_ref) DO NOTHING.
+  // Two admin grants with identical (admin_id, notes) → same sourceRef → only one row inserted.
+  await resetDb()
+  const admin    = await seedUser({ role: 'admin' })
+  const customer = await seedUser({ role: 'customer' })
+  const app      = await getApp()
+  const now      = Date.now()
+
+  // Two requests with DIFFERENT idempotency keys but the same notes (→ same sourceRef)
+  const body = { user_id: customer.id, amount_cents: 1000, notes: `dedup-test-${now}` }
+  const r1 = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('Authorization', `Bearer ${jwtFor(admin)}`)
+    .set('Idempotency-Key', `dedup-credit-a-${now}`)
+    .send(body)
+  const r2 = await request(app)
+    .post('/api/admin/credits/grant')
+    .set('Authorization', `Bearer ${jwtFor(admin)}`)
+    .set('Idempotency-Key', `dedup-credit-b-${now}`)
+    .send(body)
+  assert.ok(r1.status === 200 || r1.status === 201, `first grant: ${JSON.stringify(r1.body)}`)
+  assert.ok(r2.status === 200 || r2.status === 201, `second grant: ${JSON.stringify(r2.body)}`)
+
+  const bal = await request(app)
+    .get('/api/credits/balance')
+    .set('Authorization', `Bearer ${jwtFor(customer)}`)
+  // Balance must be 1000, not 2000 — second insert hit ON CONFLICT DO NOTHING
+  assert.equal(bal.body.balance_cents, 1000, `idempotency broken: got ${bal.body.balance_cents} instead of 1000`)
+})
+
+test('DB-2: applyCredit — parallel grants for same user produce correct total', { skip }, async () => {
+  // Advisory lock serialises concurrent applyCredit calls per user,
+  // so each reads a consistent prior balance. All grants must land.
+  await resetDb()
+  const admin    = await seedUser({ role: 'admin' })
+  const customer = await seedUser({ role: 'customer' })
+  const app      = await getApp()
+  const now      = Date.now()
+
+  const amounts = [300, 700, 1000, 200, 800]  // total: 3000
+  await Promise.all(amounts.map((amount, i) =>
+    request(app)
+      .post('/api/admin/credits/grant')
+      .set('Authorization', `Bearer ${jwtFor(admin)}`)
+      .set('Idempotency-Key', `parallel-credit-grant-${now}-${i}`)
+      .send({ user_id: customer.id, amount_cents: amount, notes: `par-${now}-${i}` })
+  ))
+
+  const bal = await request(app)
+    .get('/api/credits/balance')
+    .set('Authorization', `Bearer ${jwtFor(customer)}`)
+  const total = amounts.reduce((s, a) => s + a, 0)
+  assert.equal(bal.body.balance_cents, total,
+    `parallel grants: expected ${total}, got ${bal.body.balance_cents} (advisory lock may not be serialising correctly)`)
+})
+
+test('DB-2: applyCredit — grants to different users do not interfere', { skip }, async () => {
+  await resetDb()
+  const admin = await seedUser({ role: 'admin' })
+  const userA = await seedUser({ role: 'customer' })
+  const userB = await seedUser({ role: 'customer' })
+  const app   = await getApp()
+  const now   = Date.now()
+
+  await Promise.all([
+    request(app).post('/api/admin/credits/grant')
+      .set('Authorization', `Bearer ${jwtFor(admin)}`)
+      .set('Idempotency-Key', `isolation-credit-a-${now}`)
+      .send({ user_id: userA.id, amount_cents: 600, notes: `iso-${now}-a` }),
+    request(app).post('/api/admin/credits/grant')
+      .set('Authorization', `Bearer ${jwtFor(admin)}`)
+      .set('Idempotency-Key', `isolation-credit-b-${now}`)
+      .send({ user_id: userB.id, amount_cents: 400, notes: `iso-${now}-b` }),
+  ])
+
+  const [balA, balB] = await Promise.all([
+    request(app).get('/api/credits/balance').set('Authorization', `Bearer ${jwtFor(userA)}`),
+    request(app).get('/api/credits/balance').set('Authorization', `Bearer ${jwtFor(userB)}`),
+  ])
+  assert.equal(balA.body.balance_cents, 600, `userA balance wrong: ${balA.body.balance_cents}`)
+  assert.equal(balB.body.balance_cents, 400, `userB balance wrong: ${balB.body.balance_cents}`)
 })
 
 test.after(async () => {

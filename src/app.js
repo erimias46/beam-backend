@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
+import cookieParser from 'cookie-parser'
 import pinoHttp from 'pino-http'
 import { rateLimit } from 'express-rate-limit'
 import { fileURLToPath } from 'url'
@@ -77,6 +78,9 @@ app.use('/api/', rateLimit({
 
 /* ─── Static uploads ─────────────────────────────────────── */
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))
+
+/* ─── Cookie parsing ─────────────────────────────────────── */
+app.use(cookieParser())
 
 /* ─── Body parsing ───────────────────────────────────────── */
 // Stripe webhook needs raw body — mount before json()

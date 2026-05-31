@@ -41,7 +41,7 @@ test('[lifecycle] customer signs up → books → barber declines', { skip }, as
   await request(app).post('/api/auth/send-otp').send({ email: barberEmail })
   const barberAuth = await request(app).post('/api/auth/verify-otp').send({ email: barberEmail, code: '000000', role: 'barber' })
   assert.equal(barberAuth.status, 200, 'barber auth failed')
-  const barberToken = barberAuth.body.token
+  const barberToken = barberAuth.body.access_token || barberAuth.body.token
   const barberId    = barberAuth.body.user.id
 
   // 2. Barber sets up profile
@@ -58,7 +58,7 @@ test('[lifecycle] customer signs up → books → barber declines', { skip }, as
   await request(app).post('/api/auth/send-otp').send({ email: customerEmail })
   const custAuth = await request(app).post('/api/auth/verify-otp').send({ email: customerEmail, code: '000000', role: 'customer' })
   assert.equal(custAuth.status, 200, 'customer auth failed')
-  const customerToken = custAuth.body.token
+  const customerToken = custAuth.body.access_token || custAuth.body.token
 
   // 4. Customer creates booking
   const bookR = await request(app)

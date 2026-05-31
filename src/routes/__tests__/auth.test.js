@@ -48,7 +48,7 @@ test('POST /api/auth/verify-otp — MASTER_OTP creates/returns user', { skip }, 
     role:  'customer',
   })
   assert.equal(r.status, 200, JSON.stringify(r.body))
-  assert.ok(r.body.token)
+  assert.ok(r.body.access_token, 'expected access_token in response')
   assert.equal(r.body.user.email, 'newuser@beam0.example')
   assert.equal(r.body.user.role,  'customer')
 })
@@ -161,6 +161,57 @@ test('PATCH /api/auth/notifications — toggles pref', { skip }, async () => {
     .set('Authorization', `Bearer ${jwtFor(user)}`)
     .send({ email_notifications: false })
   assert.equal(r.status, 200)
+})
+
+/* ─── FE-1: httpOnly cookie on verify-otp ────────────── */
+
+test('POST /api/auth/verify-otp — sets httpOnly access_token cookie', { skip }, async () => {
+  await resetDb()
+  const app = await getApp()
+  const r   = await request(app).post('/api/auth/verify-otp').send({
+    email: 'cookietest@beam0.example',
+    code:  '000000',
+    role:  'customer',
+  })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  const cookies = [].concat(r.headers['set-cookie'] || [])
+  const tokenCookie = cookies.find(c => c.startsWith('access_token='))
+  assert.ok(tokenCookie, 'verify-otp must set access_token cookie')
+  assert.ok(tokenCookie.toLowerCase().includes('httponly'), 'access_token cookie must be HttpOnly')
+  assert.ok(tokenCookie.toLowerCase().includes('samesite=strict'), 'access_token cookie must be SameSite=Strict')
+})
+
+test('POST /api/auth/verify-otp — cookie alone authenticates protected endpoint', { skip }, async () => {
+  await resetDb()
+  const app     = await getApp()
+  const loginRes = await request(app).post('/api/auth/verify-otp').send({
+    email: 'cookieauth@beam0.example',
+    code:  '000000',
+    role:  'customer',
+  })
+  const cookies = [].concat(loginRes.headers['set-cookie'] || [])
+  assert.ok(cookies.length, 'should receive at least one cookie')
+
+  // Use cookie, no Authorization header — should be accepted
+  const r = await request(app)
+    .get('/api/bookings/mine')
+    .set('Cookie', cookies.join('; '))
+  assert.equal(r.status, 200, 'cookie auth should grant access without Bearer header')
+})
+
+test('POST /api/auth/verify-otp — cannot self-register as admin', { skip }, async () => {
+  await resetDb()
+  const app = await getApp()
+  const r   = await request(app).post('/api/auth/verify-otp').send({
+    email: 'evil@beam0.example',
+    code:  '000000',
+    role:  'admin',
+  })
+  if (r.status === 200) {
+    assert.notEqual(r.body.user?.role, 'admin', 'role must not be admin after self-signup')
+  } else {
+    assert.ok(r.status >= 400, `should reject admin role with 4xx, got ${r.status}`)
+  }
 })
 
 test.after(async () => {

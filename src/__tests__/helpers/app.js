@@ -3,6 +3,8 @@
 // helper to mint a JWT for a seeded user.
 
 process.env.NODE_ENV = 'test'
+// Enable MASTER_OTP bypass for tests (spec 0080 requires both NODE_ENV!='production' AND ALLOW_MASTER_OTP=true)
+process.env.ALLOW_MASTER_OTP = 'true'
 
 import jwt from 'jsonwebtoken'
 

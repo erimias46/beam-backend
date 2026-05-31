@@ -395,7 +395,14 @@ router.patch('/:id/accept', requireAuth, requireRole('barber'), idempotency(), a
       const chargeable = Math.max(0, booking.price_cents - (booking.promo_discount_cents || 0))
       if (chargeable === 0) {
         // Free booking. Skip PI entirely; transition straight to accepted.
-        await client.query(`UPDATE bookings SET status = 'accepted' WHERE id = $1`, [booking.id])
+        const { rowCount: freeCount } = await client.query(
+          `UPDATE bookings SET status = 'accepted' WHERE id = $1 AND status = 'requested'`,
+          [booking.id]
+        )
+        if (!freeCount) {
+          await client.query('ROLLBACK')
+          return res.status(409).json({ error: 'booking_state_changed', message: 'Booking status changed — please refresh.' })
+        }
         await logEvent(client, booking.id, req.user.id, booking.status, 'accepted', { free: true })
         await client.query('COMMIT')
         return res.json({ ok: true, status: 'accepted', free: true })
@@ -470,7 +477,14 @@ router.patch('/:id/accept', requireAuth, requireRole('barber'), idempotency(), a
       )
     }
 
-    await client.query(`UPDATE bookings SET status = 'accepted' WHERE id = $1`, [booking.id])
+    const { rowCount: acceptCount } = await client.query(
+      `UPDATE bookings SET status = 'accepted' WHERE id = $1 AND status = 'requested'`,
+      [booking.id]
+    )
+    if (!acceptCount) {
+      await client.query('ROLLBACK')
+      return res.status(409).json({ error: 'booking_state_changed', message: 'Booking status changed — please refresh.' })
+    }
     await logEvent(client, booking.id, req.user.id, booking.status, 'accepted', { pi: paymentIntentId })
     await client.query('COMMIT')
 
