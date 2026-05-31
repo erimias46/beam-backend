@@ -96,7 +96,8 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
 
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    await query(`DELETE FROM saved_addresses WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id])
+    const { rowCount } = await query(`DELETE FROM saved_addresses WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id])
+    if (!rowCount) return res.status(404).json({ error: 'not_found' })
     res.json({ ok: true })
   } catch (err) { next(err) }
 })

@@ -140,13 +140,13 @@ router.get('/', optionalAuth, async (req, res, next) => {
       )`
     }
     // Favorites-first sort: shift favorited barbers to the top.
-    let favSelect = '0::int AS is_favorite'
+    let favSelect = 'false AS is_favorite'
     if (favorites_first && req.user?.id) {
       params.push(req.user.id)
-      favSelect = `(EXISTS (
+      favSelect = `EXISTS (
         SELECT 1 FROM barber_favorites f
          WHERE f.customer_id = $${params.length} AND f.barber_id = u.id
-      ))::int AS is_favorite`
+      ) AS is_favorite`
       orderBy = `is_favorite DESC, ${orderBy}`
     }
 

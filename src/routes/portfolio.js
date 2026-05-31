@@ -93,7 +93,8 @@ router.delete('/barbers/portfolio/:id', requireAuth, requireRole('barber'), asyn
       `DELETE FROM barber_portfolio WHERE id = $1 AND barber_id = $2 RETURNING image_url`,
       [req.params.id, req.user.id]
     )
-    const url = rows[0]?.image_url
+    if (!rows[0]) return res.status(404).json({ error: 'not_found' })
+    const url = rows[0].image_url
     if (url?.startsWith('/uploads/portfolio/')) {
       const file = path.join(UPLOADS_DIR, path.basename(url))
       if (existsSync(file)) { try { unlinkSync(file) } catch { /* ignore */ } }

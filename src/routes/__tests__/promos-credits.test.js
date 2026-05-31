@@ -71,7 +71,7 @@ test('GET /api/credits/history — returns 200 with array', { skip }, async () =
     .set('Authorization', `Bearer ${jwtFor(user)}`)
   assert.equal(r.status, 200)
   // Response is either array at root or { history: [...] }
-  const list = r.body.history ?? r.body
+  const list = r.body.credits ?? r.body.history ?? r.body
   assert.ok(Array.isArray(list) || list === null, `expected array, got ${typeof list}`)
 })
 

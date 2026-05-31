@@ -88,8 +88,8 @@ router.put('/me/schedule', requireAuth, requireRole('barber'), async (req, res, 
 
 router.patch('/me/vacation', requireAuth, requireRole('barber'), async (req, res, next) => {
   try {
-    const until = req.body?.until
-    if (until !== null && (typeof until !== 'string' || isNaN(Date.parse(until)))) {
+    const until = req.body?.vacation_until ?? req.body?.until ?? undefined
+    if (until !== null && until !== undefined && (typeof until !== 'string' || isNaN(Date.parse(until)))) {
       return res.status(400).json({ error: 'invalid_until' })
     }
     await query(

@@ -46,8 +46,8 @@ test('POST /api/payments/setup-intent — with auth returns Stripe error or clie
   const r    = await request(app)
     .post('/api/payments/setup-intent')
     .set('Authorization', `Bearer ${jwtFor(user)}`)
-  // With placeholder key Stripe will fail — we just verify auth works
-  assert.ok(r.status === 200 || r.status === 402 || r.status === 500)
+  // With no/placeholder Stripe key the route returns 503 (not configured) or Stripe error — just verify auth passed
+  assert.ok(r.status === 200 || r.status === 402 || r.status === 500 || r.status === 503)
 })
 
 test.after(async () => {

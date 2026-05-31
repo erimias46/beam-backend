@@ -99,7 +99,7 @@ test('POST /api/reports — user can report another user', { skip }, async () =>
   const r   = await request(app)
     .post('/api/reports')
     .set('Authorization', `Bearer ${jwtFor(u1)}`)
-    .send({ reported_id: u2.id, reason: 'inappropriate_behavior', notes: 'Test report note here.' })
+    .send({ reported_id: u2.id, category: 'harassment', description: 'Test report — inappropriate behavior during the appointment.' })
   assert.ok(r.status === 200 || r.status === 201, JSON.stringify(r.body))
 })
 

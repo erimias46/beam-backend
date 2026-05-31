@@ -23,7 +23,7 @@ async function seedBarber() {
 
 async function seedPortfolioItem(barberId) {
   const { rows } = await testPool.query(
-    `INSERT INTO barber_portfolio (barber_id, image_url, caption, position)
+    `INSERT INTO barber_portfolio (barber_id, image_url, caption, display_order)
      VALUES ($1, 'https://example.com/photo.jpg', 'Test cut', 0) RETURNING *`,
     [barberId]
   )

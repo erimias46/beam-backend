@@ -17,7 +17,7 @@ const TEST_DB_URL = process.env.TEST_DATABASE_URL
   || process.env.DATABASE_URL?.replace(/\/[^/]+$/, '/beam0_test')
   || 'postgres://beam0:beam0@localhost:5432/beam0_test'
 
-export const testPool = new pg.Pool({ connectionString: TEST_DB_URL, max: 5 })
+export const testPool = new pg.Pool({ connectionString: TEST_DB_URL, max: 5, allowExitOnIdle: true })
 
 let migrated = false
 
@@ -95,6 +95,12 @@ export function pointAppPoolAtTestDb() {
   process.env.DATABASE_URL = TEST_DB_URL
 }
 
+/** Close the test pool. Safe to call multiple times; no-op after the first call.
+ *  With allowExitOnIdle:true the process exits cleanly even without calling this. */
+let poolEnded = false
 export async function closeAll() {
-  await testPool.end()
+  if (poolEnded) return
+  poolEnded = true
+  // Don't close testPool here — it would break other test files running in the
+  // same node --test process. With allowExitOnIdle:true it won't block exit.
 }

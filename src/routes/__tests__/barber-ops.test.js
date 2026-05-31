@@ -32,7 +32,7 @@ test('GET /api/barbers/me/schedule — barber can fetch own schedule', { skip },
     .get('/api/barbers/me/schedule')
     .set('Authorization', `Bearer ${jwtFor(barber)}`)
   assert.equal(r.status, 200)
-  const schedule = r.body.schedule ?? r.body
+  const schedule = r.body.windows ?? r.body.schedule ?? r.body
   assert.ok(Array.isArray(schedule))
 })
 
@@ -60,11 +60,11 @@ test('PUT /api/barbers/me/schedule — barber can update schedule', { skip }, as
   const r      = await request(app)
     .put('/api/barbers/me/schedule')
     .set('Authorization', `Bearer ${jwtFor(barber)}`)
-    .send([
+    .send({ windows: [
       { day_of_week: 1, start_minute: 540, end_minute: 1020 }, // Mon 9am-5pm
       { day_of_week: 2, start_minute: 540, end_minute: 1020 }, // Tue
       { day_of_week: 3, start_minute: 540, end_minute: 1020 }, // Wed
-    ])
+    ] })
   assert.equal(r.status, 200, JSON.stringify(r.body))
 })
 
@@ -142,7 +142,10 @@ test('PATCH /api/barbers/me/service-area — barber can set polygon', { skip }, 
   await resetDb()
   const barber  = await seedBarber()
   const app     = await getApp()
-  const polygon = [[33.75, -84.39], [33.76, -84.39], [33.76, -84.38], [33.75, -84.38], [33.75, -84.39]]
+  const polygon = [
+    { lat: 33.75, lng: -84.39 }, { lat: 33.76, lng: -84.39 },
+    { lat: 33.76, lng: -84.38 }, { lat: 33.75, lng: -84.38 }, { lat: 33.75, lng: -84.39 },
+  ]
   const r       = await request(app)
     .patch('/api/barbers/me/service-area')
     .set('Authorization', `Bearer ${jwtFor(barber)}`)

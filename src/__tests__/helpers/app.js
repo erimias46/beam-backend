@@ -12,9 +12,9 @@ export async function getApp() {
   return appPromise
 }
 
-const SECRET = process.env.JWT_SECRET || 'dev-only-secret-please-override'
-
-/** Mint an access token for a user object (must contain {id, role, email}). */
+/** Mint an access token for a user object (must contain {id, role, email}).
+ *  Secret is read lazily so dotenv (loaded by app.js) has time to populate it. */
 export function jwtFor(user) {
-  return jwt.sign({ id: user.id, sub: user.id, role: user.role, email: user.email }, SECRET, { expiresIn: '15m' })
+  const secret = process.env.JWT_SECRET || 'dev-only-secret-please-override'
+  return jwt.sign({ id: user.id, sub: user.id, role: user.role, email: user.email }, secret, { expiresIn: '15m' })
 }
